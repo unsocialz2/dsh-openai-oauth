@@ -6,6 +6,7 @@ class FakeServer {
   events = []
   responses = []
   turnInput = ''
+  threadTools = []
 
   async account() { return { type: 'chatgpt' } }
   async models() {
@@ -15,7 +16,7 @@ class FakeServer {
       supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'High' }],
     }]
   }
-  async startThread() { return 'thread-1' }
+  async startThread(input) { this.threadTools = input.dynamicTools; return 'thread-1' }
   async startTurn(_threadId, input) {
     this.turnInput = input.input[0].text
     this.events.push({
@@ -150,4 +151,45 @@ test('interrupts the Codex turn when Harness cancels', async () => {
   controller.abort()
   await assert.rejects(result)
   assert.equal(interrupted, true)
+})
+
+test('aliases reserved MCP tool names while returning the original Harness name', async () => {
+  const server = new FakeServer()
+  const original = 'mcp__burp__base64_decode'
+  server.startTurn = async () => {
+    server.events.push({
+      method: 'item/tool/call', requestId: 7,
+      params: { threadId: 'thread-1', callId: 'call-1', tool: server.threadTools[0].name, arguments: { input: 'aGVsbG8=' } },
+    })
+    return 'turn-1'
+  }
+  const chunks = await Array.fromAsync(new CodexAppServerAdapter(server).stream({
+    ...base,
+    tools: [{ name: original, description: 'Decode Base64 using Burp', parameters: { type: 'object' } }],
+    messages: [{ id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'decode' }] }],
+  }))
+  const alias = server.threadTools[0].name
+  assert.match(alias, /^dsh_/)
+  assert.doesNotMatch(alias, /^mcp__/)
+  assert.equal(chunks.find(chunk => chunk.type === 'block-end').block.name, original)
+})
+
+test('normalizes long MCP tool names without losing Harness identity', async () => {
+  const server = new FakeServer()
+  const original = 'mcp__' + 'very_long_tool_name_'.repeat(12)
+  server.startTurn = async () => {
+    server.events.push({
+      method: 'item/tool/call', requestId: 7,
+      params: { threadId: 'thread-1', callId: 'call-1', tool: server.threadTools[0].name, arguments: {} },
+    })
+    return 'turn-1'
+  }
+  const chunks = await Array.fromAsync(new CodexAppServerAdapter(server).stream({
+    ...base,
+    tools: [{ name: original, description: 'Long MCP tool', parameters: { type: 'object' } }],
+    messages: [{ id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'test' }] }],
+  }))
+  assert.ok(server.threadTools[0].name.length <= 128)
+  assert.match(server.threadTools[0].name, /^[A-Za-z0-9_-]+$/)
+  assert.equal(chunks.find(chunk => chunk.type === 'block-end').block.name, original)
 })
