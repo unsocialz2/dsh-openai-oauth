@@ -4,14 +4,12 @@ import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync } from 'node:f
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { codexHome } from './paths.js'
 
 const PACKAGE = 'dsh-openai-oauth'
 const LEGACY_PACKAGES = ['deepseek-harness-openai-oauth', 'dsh-llm-codex-app-server']
-const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const packageVersion = (JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { version: string }).version
-const packageSpec = `${PACKAGE}@${packageVersion}`
+const DEFAULT_PACKAGE_SPEC = 'github:unsocialz2/dsh-openai-oauth'
+const packageSpec = process.env.DSH_OPENAI_OAUTH_INSTALL_SPEC?.trim() || DEFAULT_PACKAGE_SPEC
 
 function dshHome(): string {
   return process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
