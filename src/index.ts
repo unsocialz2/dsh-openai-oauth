@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
@@ -28,6 +29,7 @@ interface PendingToolCall {
 interface Session {
   threadId: string
   tools: string
+  originalToolNames: Map<string, string>
   pending: PendingToolCall[]
   backlog: ServerEvent[]
   turnId?: string
@@ -119,10 +121,31 @@ function toolResults(options: GenerateOptions): Map<string, ToolResultView> {
   return results
 }
 
+/**
+ * Codex app-server reserves `mcp` and `mcp__*` dynamic tool names.
+ * Keep Harness names intact outside the Codex protocol boundary.
+ */
+function codexToolName(name: string): string {
+  if (name !== 'mcp' && !name.startsWith('mcp__') && /^[A-Za-z0-9_-]{1,128}$/.test(name)) return name
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 96)
+  const digest = createHash('sha256').update(name).digest('hex').slice(0, 24)
+  return `dsh_${safe}_${digest}`
+}
+
+function originalToolNames(options: GenerateOptions): Map<string, string> {
+  const names = new Map<string, string>()
+  for (const tool of options.tools ?? []) {
+    const alias = codexToolName(tool.name)
+    if (names.has(alias)) throw new LlmError(`Duplicate Codex dynamic tool alias "${alias}"`, 'INVALID_REQUEST')
+    names.set(alias, tool.name)
+  }
+  return names
+}
+
 function toolSpec(options: GenerateOptions): Record<string, unknown>[] {
   return (options.tools ?? []).map(tool => ({
     type: 'function',
-    name: tool.name,
+    name: codexToolName(tool.name),
     description: tool.description,
     inputSchema: tool.parameters,
   }))
@@ -210,6 +233,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
   }
 
   private async createSession(options: GenerateOptions): Promise<Session> {
+    const originalNames = originalToolNames(options)
     const tools = JSON.stringify(toolSpec(options))
     const system = [
       options.system ?? '',
@@ -225,7 +249,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
       baseInstructions: system,
       dynamicTools: toolSpec(options),
     })
-    return { threadId, tools, pending: [], backlog: [] }
+    return { threadId, tools, originalToolNames: originalNames, pending: [], backlog: [] }
   }
 
   private async session(options: GenerateOptions): Promise<Session> {
@@ -269,7 +293,9 @@ export class CodexAppServerAdapter extends LlmAdapter {
       if (event.requestId === undefined || typeof callId !== 'string' || typeof tool !== 'string') {
         throw new LlmError('Malformed Codex dynamic tool request', 'PROTOCOL_ERROR')
       }
-      calls.push({ requestId: event.requestId, callId, name: tool, arguments: args })
+      const originalName = session.originalToolNames.get(tool)
+      if (originalName === undefined) throw new LlmError(`Unknown Codex dynamic tool alias "${tool}"`, 'PROTOCOL_ERROR')
+      calls.push({ requestId: event.requestId, callId, name: originalName, arguments: args })
     }
     add(first)
 
