@@ -6,18 +6,35 @@ Use GPT models from your ChatGPT account as the main model in DeepSeek Harness. 
 
 You do not need an OpenAI API key. The package does not copy another Codex installation's `auth.json`, implement its own OAuth client, or call an unpublished ChatGPT endpoint.
 
+## Compatibility
+
+This fork keeps the original ChatGPT OAuth/Codex integration and adds compatibility with the DSH 0.2 tool-message contract.
+
+- DSH 0.2 uses first-class `role: "tool"` result messages with `toolCallId` on the message.
+- Older DSH releases nested a `tool-result` block inside a user message.
+- The adapter accepts both formats and preserves the exact Codex call id when returning tool output.
+- The adapter no longer imports the generation-specific `CallId` runtime constructor, which was renamed in the DSH 0.2 line.
+
+The primary target tested by this fork is **DeepSeek Harness 0.2.0-rc.2** while retaining the older result shape as a compatibility fallback.
+
 ## Requirements
 
 - Node.js 22.19 or newer
-- DeepSeek Harness developer preview `0.1.0-rc.6`
+- DeepSeek Harness developer preview (including `0.2.0-rc.2`)
 - A ChatGPT account with Codex access
 
 ## Install
 
-Run one command:
+After this compatibility branch is merged, install directly from this fork with:
 
 ```sh
-npx -y dsh-openai-oauth install
+npx -y github:unsocialz2/dsh-openai-oauth install
+```
+
+For testing the compatibility branch before merge:
+
+```sh
+npx -y github:unsocialz2/dsh-openai-oauth#compat/dsh-0.2.0-rc.2 install
 ```
 
 The installer registers the package with the `web` and `headless` profiles, plus any custom profiles that already exist. It also replaces the old `deepseek-harness-openai-oauth` and `dsh-llm-codex-app-server` packages if found.
@@ -84,6 +101,8 @@ npm install
 npm test
 npm pack --dry-run
 ```
+
+The regression suite covers the DSH 0.2 tool-role result format, the older nested result format, tool errors, and empty tool output.
 
 This is an independent community plugin. It is not endorsed by DeepSeek or OpenAI.
 

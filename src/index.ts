@@ -1,18 +1,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
-  CallId,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type {
-  ContentBlock,
   GenerateOptions,
   LlmModelInfo,
   LlmResolvedModelInfo,
   StreamChunk,
-  ToolResultBlock,
 } from '@deepseek-ai/dsh-llm'
 import { AppServer, type ServerEvent } from './app-server.js'
 import { oauthRoute } from './oauth-http.js'
@@ -20,7 +17,6 @@ import { oauthRoute } from './oauth-http.js'
 export const name = 'llm-codex-app-server'
 export const inject = ['llm']
 const PROVIDER = 'openai-codex'
-const REPLAY_KIND = 'codex-app-server'
 
 interface PendingToolCall {
   requestId: string | number
@@ -37,10 +33,32 @@ interface Session {
   turnId?: string
 }
 
-function textOf(blocks: readonly ContentBlock[]): string {
-  return blocks.map(block => block.type === 'text'
-    ? block.text
-    : block.type === 'tool-result' ? textOf(block.content) : '').join('')
+interface ToolResultView {
+  toolCallId: string
+  content: readonly unknown[]
+  isError?: boolean
+}
+
+interface MessageLike {
+  role?: unknown
+  toolCallId?: unknown
+  isError?: unknown
+  source?: { kind?: unknown; callId?: unknown }
+  content?: readonly unknown[]
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : undefined
+}
+
+function textOf(blocks: readonly unknown[]): string {
+  return blocks.map((raw) => {
+    const block = record(raw)
+    if (block === undefined) return ''
+    if (block.type === 'text' && typeof block.text === 'string') return block.text
+    if (block.type === 'tool-result' && Array.isArray(block.content)) return textOf(block.content)
+    return ''
+  }).join('')
 }
 
 function newUserText(options: GenerateOptions): string {
@@ -53,11 +71,49 @@ function newUserText(options: GenerateOptions): string {
     .join('\n\n')
 }
 
-function toolResults(options: GenerateOptions): Map<string, ToolResultBlock> {
-  const results = new Map<string, ToolResultBlock>()
-  for (const message of options.messages) {
-    for (const block of message.content) {
-      if (block.type === 'tool-result') results.set(block.toolCallId, block)
+function messageLevelToolResult(message: MessageLike): ToolResultView | undefined {
+  if (message.role !== 'tool' || !Array.isArray(message.content)) return undefined
+
+  const source = message.source
+  const callId = typeof message.toolCallId === 'string' && message.toolCallId.length > 0
+    ? message.toolCallId
+    : source?.kind === 'tool' && typeof source.callId === 'string' && source.callId.length > 0
+      ? source.callId
+      : undefined
+
+  if (callId === undefined) return undefined
+  return {
+    toolCallId: callId,
+    content: message.content,
+    isError: message.isError === true,
+  }
+}
+
+function legacyToolResult(raw: unknown): ToolResultView | undefined {
+  const block = record(raw)
+  if (block?.type !== 'tool-result' || typeof block.toolCallId !== 'string' || !Array.isArray(block.content)) {
+    return undefined
+  }
+  return {
+    toolCallId: block.toolCallId,
+    content: block.content,
+    isError: block.isError === true,
+  }
+}
+
+function toolResults(options: GenerateOptions): Map<string, ToolResultView> {
+  const results = new Map<string, ToolResultView>()
+  for (const rawMessage of options.messages) {
+    // DSH >= 0.2 uses first-class `role: "tool"` messages.  Older releases
+    // nested a `tool-result` block inside a user message.  Accept both shapes
+    // so the provider remains usable across the transition.
+    const message = rawMessage as unknown as MessageLike
+    const direct = messageLevelToolResult(message)
+    if (direct !== undefined) results.set(direct.toolCallId, direct)
+
+    for (const block of message.content ?? []) {
+      const legacy = legacyToolResult(block)
+      if (legacy !== undefined) results.set(legacy.toolCallId, legacy)
     }
   }
   return results
@@ -77,8 +133,17 @@ function sessionKey(options: GenerateOptions): string {
 }
 
 function eventThreadItem(event: ServerEvent): Record<string, unknown> | undefined {
-  const item = event.params.item
-  return item !== null && typeof item === 'object' ? item as Record<string, unknown> : undefined
+  return record(event.params.item)
+}
+
+/**
+ * DSH renamed the runtime brand constructor from CallId to ToolCallId in the
+ * 0.2 line.  Both constructors are identity functions over the provider id;
+ * keeping the wire id as a string avoids importing either generation-specific
+ * runtime symbol while preserving the exact correlation key.
+ */
+function harnessToolCallId(id: string): any {
+  return id
 }
 
 export class CodexAppServerAdapter extends LlmAdapter {
@@ -208,9 +273,8 @@ export class CodexAppServerAdapter extends LlmAdapter {
     }
     add(first)
 
-    // ponytail: app-server has no batch-end event for parallel dynamic calls;
-    // collect the synchronously emitted JSON-RPC burst, then fail closed if a
-    // later call appears after Harness has started executing this batch.
+    // app-server has no batch-end event for parallel dynamic calls; collect the
+    // synchronously emitted JSON-RPC burst before returning control to Harness.
     while (true) {
       const settle = AbortSignal.timeout(25)
       const combined = signal === undefined ? settle : AbortSignal.any([signal, settle])
@@ -293,7 +357,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           for (const call of calls) {
             const index = nextIndex++
             const args = JSON.stringify(call.arguments ?? {})
-            const id = CallId(call.callId)
+            const id = harnessToolCallId(call.callId)
             yield { type: 'block-start', index, blockType: 'tool-call' }
             yield { type: 'tool-call-delta', index, id, name: call.name, argumentsDelta: args }
             yield {
@@ -304,7 +368,6 @@ export class CodexAppServerAdapter extends LlmAdapter {
           yield {
             type: 'finish',
             reason: { kind: 'tool-calls' },
-            replayState: { kind: REPLAY_KIND, version: 1, threadId: session.threadId },
           }
           return
         }
@@ -323,7 +386,6 @@ export class CodexAppServerAdapter extends LlmAdapter {
             reason: turn.status === 'interrupted'
               ? { kind: 'aborted', failure: { message: 'Codex turn interrupted', code: 'ABORTED' } }
               : { kind: 'stop' },
-            replayState: { kind: REPLAY_KIND, version: 1, threadId: session.threadId },
           }
           return
         }
