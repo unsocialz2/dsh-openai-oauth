@@ -13,8 +13,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
       - run: npm test
+      - name: Clean package import smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="$(npm pack --silent | tail -n1)"
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$pkg"
+          node --input-type=module -e "import('dsh-openai-oauth').then(m => console.log('PLUGIN LOAD OK:', Object.keys(m)))"
 
   dsh-0-2-contract:
     runs-on: ubuntu-latest
@@ -24,12 +34,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - name: Replace adapter-facing DSH packages with 0.2.0-rc.2
-        run: >-
-          npm install --no-save --legacy-peer-deps
-          @deepseek-ai/dsh-llm@0.2.0-rc.2
-          @deepseek-ai/dsh-host-webserver@0.2.0-rc.2
+      - run: npm install --no-audit --no-fund
+      - name: Verify pinned DSH LLM runtime
+        run: node -e "const p=require('@deepseek-ai/dsh-llm/package.json'); if(p.version!=='0.2.0-rc.2') throw new Error('unexpected dsh-llm '+p.version); console.log(p.version)"
       - name: Type-check and emit against DSH 0.2.0-rc.2
         run: npx tsc -p tsconfig.json
       - name: Run adapter regression tests on DSH 0.2.0-rc.2
