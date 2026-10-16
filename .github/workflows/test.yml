@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  package-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  dsh-0-2-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Replace adapter-facing DSH packages with 0.2.0-rc.2
+        run: >-
+          npm install --no-save --legacy-peer-deps
+          @deepseek-ai/dsh-llm@0.2.0-rc.2
+          @deepseek-ai/dsh-host-webserver@0.2.0-rc.2
+      - name: Type-check and emit against DSH 0.2.0-rc.2
+        run: npx tsc -p tsconfig.json
+      - name: Run adapter regression tests on DSH 0.2.0-rc.2
+        run: node --test tests/adapter.test.mjs
