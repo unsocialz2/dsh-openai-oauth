@@ -52,31 +52,82 @@ const base = {
   tools: [{ name: 'echo', description: 'echo', parameters: { type: 'object' } }],
 }
 
-test('bridges a Codex dynamic tool call across two Harness model steps', async () => {
-  const server = new FakeServer()
-  const adapter = new CodexAppServerAdapter(server)
+async function requestTool(adapter, server) {
   const first = await Array.fromAsync(adapter.stream({
     ...base,
     messages: [
       { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'ping' }] },
-      { id: 'u2', role: 'user', source: { kind: 'plugin', plugin: 'context' }, content: [{ type: 'text', text: 'runtime context' }] },
     ],
   }))
-  assert.equal(server.turnInput, 'ping\n\nruntime context')
+  assert.equal(server.turnInput, 'ping')
   assert.deepEqual(first.at(-1).reason, { kind: 'tool-calls' })
   assert.equal(first.find(chunk => chunk.type === 'block-end').block.id, 'call-1')
+}
+
+test('bridges a DSH 0.2 tool-role result back to Codex', async () => {
+  const server = new FakeServer()
+  const adapter = new CodexAppServerAdapter(server)
+  await requestTool(adapter, server)
 
   const second = await Array.fromAsync(adapter.stream({
     ...base,
     messages: [
       { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'ping' }] },
       { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'openai-codex', model: 'gpt-5.6-sol' }, content: [{ type: 'tool-call', id: 'call-1', name: 'echo', arguments: '{"text":"ping"}' }] },
-      { id: 't1', role: 'user', source: { kind: 'tool', callId: 'call-1' }, content: [{ type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: 'pong-from-harness' }], isError: false }] },
+      {
+        id: 't1', role: 'tool', toolCallId: 'call-1', isError: false,
+        source: { kind: 'tool', callId: 'call-1' },
+        content: [{ type: 'text', text: 'pong-from-harness' }],
+      },
     ],
   }))
+
   assert.equal(server.responses[0].result.contentItems[0].text, 'pong-from-harness')
+  assert.equal(server.responses[0].result.success, true)
   assert.equal(second.find(chunk => chunk.type === 'block-end').block.text, 'pong')
   assert.deepEqual(second.at(-1).reason, { kind: 'stop' })
+})
+
+test('keeps the pre-0.2 nested tool-result shape as a compatibility fallback', async () => {
+  const server = new FakeServer()
+  const adapter = new CodexAppServerAdapter(server)
+  await requestTool(adapter, server)
+
+  await Array.fromAsync(adapter.stream({
+    ...base,
+    messages: [
+      { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'ping' }] },
+      { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'openai-codex', model: 'gpt-5.6-sol' }, content: [{ type: 'tool-call', id: 'call-1', name: 'echo', arguments: '{"text":"ping"}' }] },
+      {
+        id: 't1', role: 'user', source: { kind: 'tool', callId: 'call-1' },
+        content: [{ type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: 'legacy-output' }], isError: false }],
+      },
+    ],
+  }))
+
+  assert.equal(server.responses[0].result.contentItems[0].text, 'legacy-output')
+  assert.equal(server.responses[0].result.success, true)
+})
+
+test('preserves DSH 0.2 tool failure and empty-output semantics', async () => {
+  const server = new FakeServer()
+  const adapter = new CodexAppServerAdapter(server)
+  await requestTool(adapter, server)
+
+  await Array.fromAsync(adapter.stream({
+    ...base,
+    messages: [
+      { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'ping' }] },
+      { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'openai-codex', model: 'gpt-5.6-sol' }, content: [{ type: 'tool-call', id: 'call-1', name: 'echo', arguments: '{"text":"ping"}' }] },
+      {
+        id: 't1', role: 'tool', toolCallId: 'call-1', isError: true,
+        source: { kind: 'tool', callId: 'call-1' }, content: [],
+      },
+    ],
+  }))
+
+  assert.equal(server.responses[0].result.contentItems[0].text, '(no output)')
+  assert.equal(server.responses[0].result.success, false)
 })
 
 test('discovers models from Codex instead of hardcoding GPT versions', async () => {
