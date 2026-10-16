@@ -15,15 +15,16 @@ jobs:
           cache: npm
       - run: npm install --no-audit --no-fund --legacy-peer-deps
       - run: npm test
-      - name: Clean package import smoke test
+      - name: Clean package import smoke test with pnpm
         shell: bash
         run: |
           set -euo pipefail
           pkg="$(npm pack --silent | tail -n1)"
           tmp="$(mktemp -d)"
           cd "$tmp"
-          npm init -y >/dev/null 2>&1
-          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$pkg"
+          printf '{"private":true}\n' > package.json
+          npx -y pnpm@12.11.2 add "$GITHUB_WORKSPACE/$pkg"
+          npx -y pnpm@12.11.2 list --depth 2
           node --input-type=module -e "import('dsh-openai-oauth').then(m => console.log('PLUGIN LOAD OK:', Object.keys(m)))"
 
   dsh-0-2-contract:

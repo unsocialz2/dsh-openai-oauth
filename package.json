@@ -1,6 +1,6 @@
 {
   "name": "dsh-openai-oauth",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "DeepSeek Harness LLM provider for Codex models using managed ChatGPT OAuth, with DSH 0.2 tool bridge compatibility",
   "type": "module",
   "main": "lib/index.js",
@@ -56,18 +56,15 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
     "@openai/codex": "0.146.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.5",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
     "@deepseek-ai/dsh-host-webserver": {
       "optional": true
     },
