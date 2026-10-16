@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 
-const { version } = JSON.parse(await readFile('package.json', 'utf8'))
+const installSpec = 'github:unsocialz2/dsh-openai-oauth'
 
 test('global installer targets standard and existing profiles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-codex-global-'))
@@ -29,7 +29,34 @@ test('global installer targets standard and existing profiles', async () => {
   assert(calls.some(line => line.includes(' --profile web add ')))
   assert(calls.some(line => line.includes(' --profile headless add ')))
   assert(calls.some(line => line.includes(' --profile custom add ')))
-  assert(calls.every(line => line.includes(` add dsh-openai-oauth@${version}`)))
+  assert(calls.every(line => line.includes(` add ${installSpec}`)))
+})
+
+test('global installer allows an explicit package-spec override', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-codex-override-'))
+  const bin = join(root, 'bin')
+  const log = join(root, 'npx.log')
+  await mkdir(bin)
+  const npx = join(bin, 'npx')
+  await writeFile(npx, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_NPX_LOG"\n')
+  await chmod(npx, 0o755)
+
+  const override = 'github:unsocialz2/dsh-openai-oauth#compat/test'
+  const result = spawnSync(process.execPath, ['lib/global.js', 'install'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DSH_HOME: join(root, 'dsh'),
+      DSH_OPENAI_OAUTH_INSTALL_SPEC: override,
+      FAKE_NPX_LOG: log,
+      PATH: `${bin}:${process.env.PATH}`,
+    },
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const calls = (await readFile(log, 'utf8')).trim().split('\n')
+  assert.equal(calls.length, 2)
+  assert(calls.every(line => line.includes(` add ${override}`)))
 })
 
 test('global installer replaces the legacy package after adding the new package', async () => {
@@ -51,7 +78,7 @@ test('global installer replaces the legacy package after adding the new package'
   })
   assert.equal(result.status, 0, result.stderr)
   const calls = (await readFile(log, 'utf8')).trim().split('\n')
-  const add = calls.findIndex(line => line.includes(` --profile custom add dsh-openai-oauth@${version}`))
+  const add = calls.findIndex(line => line.includes(` --profile custom add ${installSpec}`))
   const remove = calls.findIndex(line => line.includes(' --profile custom remove dsh-llm-codex-app-server'))
   assert(add >= 0)
   assert(remove > add)
