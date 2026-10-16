@@ -13,7 +13,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm install --no-audit --no-fund
+      - run: npm install --no-audit --no-fund --legacy-peer-deps
       - run: npm test
       - name: Clean package import smoke test
         shell: bash
@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm install --no-audit --no-fund
+      - run: npm install --no-audit --no-fund --legacy-peer-deps
       - name: Verify pinned DSH LLM runtime
         run: node -e "const p=require('@deepseek-ai/dsh-llm/package.json'); if(p.version!=='0.2.0-rc.2') throw new Error('unexpected dsh-llm '+p.version); console.log(p.version)"
       - name: Type-check and emit against DSH 0.2.0-rc.2
